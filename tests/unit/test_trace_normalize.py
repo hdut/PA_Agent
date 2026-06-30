@@ -424,6 +424,16 @@ def test_partial_and_pending_answer_synonyms() -> None:
     normalize_trace_item(item_partial_yes, normalization_mode="lenient")
     assert item_partial_yes["answer"] == "中性"
 
+    item_yes_partial = {
+        "node_id": "6.2",
+        "question": "是否仍在通道内运行？",
+        "answer": "是部分",
+        "reason": "x",
+        "bar_range": "K10-K1",
+    }
+    normalize_trace_item(item_yes_partial, normalization_mode="strict")
+    assert item_yes_partial["answer"] == "中性"
+
     item_channel = {
         "node_id": "4.2",
         "question": "通道方向？",

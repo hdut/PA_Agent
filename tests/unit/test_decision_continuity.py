@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pa_agent.ai.decision_continuity import (
     apply_continuity_guard,
+    assess_limit_order_triggered,
     assess_plan_invalidation,
     audit_relation_fields,
     build_continuity_context,
@@ -41,6 +42,59 @@ def test_assess_plan_invalidation_short_stop_hit():
     inv, reason = assess_plan_invalidation(dec, _frame(close=4194.5, high=4195.0))
     assert inv is True
     assert "止损" in reason
+
+
+def test_assess_limit_order_triggered_long_touch():
+    dec = {
+        "order_direction": "做多",
+        "order_type": "限价单",
+        "entry_price": 7459.05,
+        "stop_loss_price": 7456.08,
+    }
+    frame = _frame(close=7458.24, high=7463.72, low=7456.78)
+    triggered, reason, seq = assess_limit_order_triggered(dec, frame, max_bars=3)
+    assert triggered is True
+    assert seq == 1
+    assert "7459.05" in reason
+
+
+def test_assess_limit_order_triggered_long_not_touched():
+    dec = {
+        "order_direction": "做多",
+        "order_type": "限价单",
+        "entry_price": 7450.0,
+        "stop_loss_price": 7440.0,
+    }
+    triggered, reason, seq = assess_limit_order_triggered(
+        dec, _frame(close=7458.24, high=7463.72, low=7456.78), max_bars=1
+    )
+    assert triggered is False
+    assert reason == ""
+    assert seq is None
+
+
+def test_render_continuity_prompt_mentions_limit_triggered():
+    ctx = {
+        "has_previous_plan": True,
+        "previous_decision": {
+            "order_direction": "做多",
+            "order_type": "限价单",
+            "entry_price": 7459.05,
+            "stop_loss_price": 7456.08,
+        },
+        "previous_time": "2026-06-30 14:38:44",
+        "bars_since": 1,
+        "cooldown_bars": 3,
+        "invalidated": False,
+        "limit_triggered": True,
+        "limit_trigger_reason": "K1 low=7456.78 已触及",
+        "direction": "neutral",
+        "always_in_branch": "AIL",
+        "timeframe": "15m",
+    }
+    text = render_continuity_prompt_block(ctx)
+    assert "限价已触发" in text
+    assert "禁止" in text and "仍等待限价触发" in text
 
 
 def test_entries_same_structure_within_ticks():

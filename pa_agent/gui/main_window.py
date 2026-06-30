@@ -137,6 +137,31 @@ class _AnalysisWorker(QThread):
         self._previous_record = previous_record
         self._incremental_new_bar_count = incremental_new_bar_count
 
+    def _persist_program_error_record(self, exc: Exception) -> Any:
+        """Write a minimal failed record to pending when submit() raises unexpectedly."""
+        try:
+            from pa_agent.orchestrator.two_stage import _build_empty_record
+
+            settings = getattr(self._orchestrator, "_settings", None)
+            pending_writer = getattr(self._orchestrator, "_pending_writer", None)
+            if pending_writer is None:
+                return None
+            record = _build_empty_record(self._frame, settings)
+            record = record.model_copy(
+                update={
+                    "exception": {
+                        "type": "program_error",
+                        "stage": "unknown",
+                        "message": str(exc),
+                    }
+                }
+            )
+            pending_writer.save_partial(record, "program_error")
+            return record
+        except Exception as save_exc:  # noqa: BLE001
+            logger.warning("Failed to persist program_error record: %s", save_exc)
+            return None
+
     def run(self) -> None:
         from pa_agent.util.threading import OrchestratorEvent
 
@@ -198,10 +223,12 @@ class _AnalysisWorker(QThread):
             from pa_agent.ai.deepseek_client import CancelledError as _CancelledError
             if isinstance(exc, _CancelledError):
                 logger.info("Analysis worker cancelled: %s", exc)
+                decision = {}
+                record = None  # type: ignore[assignment]
             else:
                 logger.error("Analysis worker error: %s", exc, exc_info=True)
-            decision = {}
-            record = None  # type: ignore[assignment]
+                decision = {}
+                record = self._persist_program_error_record(exc)
             self.error_occurred.emit(str(exc))
 
         if record is not None:
@@ -247,6 +274,7 @@ class MainWindow(QMainWindow):
         self._last_stage1_diagnosis: dict | None = None
         self._last_analysis_record: Any = None
         self._last_analysis_frame: Any = None  # KlineFrame of the most recent analysis
+        self._analysis_previous_record: Any = None  # incremental base record for chart continuity
         self._demo_mode = False
         self._demo_mode_kind: str | None = None  # manual | auto
         self._demo_record_path: str | None = None
@@ -2901,6 +2929,7 @@ class MainWindow(QMainWindow):
 
         self._last_analysis_frame = frame
         previous_record = getattr(prep, "previous_record", None)
+        self._analysis_previous_record = previous_record
         incremental_new_bar_count = getattr(prep, "incremental_new_bar_count", None)
         incremental_detail = getattr(prep, "incremental_detail", None)
 
@@ -3184,7 +3213,22 @@ class MainWindow(QMainWindow):
                     getattr(getattr(self._ctx.settings, "general", None), "enable_next_bar_prediction", False)
                 ) if self._ctx.settings is not None else False,
             )
-            self._chart_widget.set_decision(inner)
+            from pa_agent.gui.chart_decision_overlay import enrich_decision_for_chart_overlay
+
+            cooldown = 3
+            if self._ctx.settings is not None:
+                cooldown = int(
+                    getattr(self._ctx.settings.general, "structure_flip_cooldown_bars", 3) or 3
+                )
+            chart_decision = enrich_decision_for_chart_overlay(
+                inner,
+                stage2_full=decision if isinstance(decision, dict) else None,
+                frame=getattr(self, "_last_analysis_frame", None),
+                stage1_json=stage1_diag or None,
+                previous_record=getattr(self, "_analysis_previous_record", None),
+                cooldown_bars=cooldown,
+            )
+            self._chart_widget.set_decision(chart_decision)
             if getattr(self, "_demo_mode", False):
                 self._chart_widget.fit_view()
             stance = None
@@ -4039,12 +4083,9 @@ class MainWindow(QMainWindow):
             dlg.focus_api_key_field()
         if dlg.exec():
             self._ctx.settings = settings
-            client = getattr(self._ctx, "client", None)
-            if client is not None:
-                try:
-                    client._settings = settings.provider  # type: ignore[attr-defined]
-                except Exception:  # noqa: BLE001
-                    pass
+            from pa_agent.ai.client_factory import create_ai_client
+
+            self._ctx.client = create_ai_client(settings.provider, logger_=logger)
             if settings is not None:
                 key = getattr(settings.provider, "api_key", "") or ""
                 self._debug_widget._api_key = key

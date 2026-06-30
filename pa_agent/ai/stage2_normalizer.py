@@ -770,6 +770,25 @@ def _coerce_decision_no_order(out: dict[str, Any]) -> bool:
     return True
 
 
+def _coerce_breakout_without_basis(out: dict[str, Any]) -> bool:
+    """Breakout orders require entry_basis_*; fall back to limit when missing."""
+    decision = out.get("decision")
+    if not isinstance(decision, dict):
+        return False
+    if decision.get("order_type") != "突破单":
+        return False
+    if decision.get("entry_basis_bar") and decision.get("entry_basis_extreme"):
+        return False
+    decision["order_type"] = "限价单"
+    decision["entry_basis_bar"] = None
+    decision["entry_basis_extreme"] = None
+    decision["entry_rule"] = None
+    logger.debug(
+        "breakout order missing entry_basis_*; coerced to 限价单"
+    )
+    return True
+
+
 def _repair_terminal_trade_node(out: dict[str, Any]) -> bool:
     """A successful trade should not terminate at §14 (prohibition scan)."""
     decision = out.get("decision")
@@ -1580,6 +1599,8 @@ def normalize_stage2(
             DecisionNodeEngine.apply_stage2(out, kline_frame, stage1_json)
         except Exception as exc:  # noqa: BLE001
             logger.warning("DecisionNodeEngine.apply_stage2 failed: %s", exc)
+    if _coerce_breakout_without_basis(out):
+        logger.debug("Coerced breakout-without-basis to 限价单 after DecisionNodeEngine")
 
     normalize_stage2_traces(
         out,

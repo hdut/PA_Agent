@@ -1148,3 +1148,19 @@ def test_repair_misplaced_decision_fields_from_diagnosis_summary() -> None:
     assert "current_cycle" not in out["next_cycle_prediction"]
     assert out["next_cycle_prediction"]["cycle"] == "broad_channel"
     assert "estimated_win_rate_reasoning" not in out["diagnosis_summary"]
+
+
+def test_coerce_breakout_without_basis_to_limit() -> None:
+    from pa_agent.ai.stage2_normalizer import _coerce_breakout_without_basis
+
+    out = {
+        "decision": {
+            "order_type": "突破单",
+            "entry_basis_bar": None,
+            "entry_basis_extreme": None,
+            "entry_rule": "K1 high + 1 tick",
+        }
+    }
+    assert _coerce_breakout_without_basis(out) is True
+    assert out["decision"]["order_type"] == "限价单"
+    assert out["decision"]["entry_rule"] is None

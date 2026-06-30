@@ -160,6 +160,51 @@ def assess_plan_invalidation(
     return False, ""
 
 
+def assess_limit_order_triggered(
+    decision: dict | None,
+    frame: Any,
+    *,
+    max_bars: int | None = None,
+) -> tuple[bool, str, int | None]:
+    """True when a resting limit entry was touched on a recent closed bar."""
+    if not is_order_plan(decision):
+        return False, "", None
+    order_type = str(decision.get("order_type") or "").strip()
+    if order_type not in ("限价单", "突破单"):
+        return False, "", None
+
+    sign = order_direction_sign(str(decision.get("order_direction") or ""))
+    entry = _parse_price(decision.get("entry_price"))
+    if entry is None or sign == 0:
+        return False, "", None
+
+    bars = list(getattr(frame, "bars", ()) or [])
+    if not bars:
+        return False, "", None
+
+    scan = bars if max_bars is None else bars[: max(1, int(max_bars))]
+    tick = float(infer_price_tick_from_frame(frame) or 0.01)
+    tol = max(tick * 0.5, 1e-9)
+
+    for bar in scan:
+        seq = int(getattr(bar, "seq", 0) or 0)
+        low = float(getattr(bar, "low", 0))
+        high = float(getattr(bar, "high", low))
+        if sign > 0 and low <= entry + tol:
+            return (
+                True,
+                f"K{seq} low={low} 已触及/跌破限价入场 {entry}（做多限价视为已触发）",
+                seq,
+            )
+        if sign < 0 and high >= entry - tol:
+            return (
+                True,
+                f"K{seq} high={high} 已触及/突破限价入场 {entry}（做空限价视为已触发）",
+                seq,
+            )
+    return False, "", None
+
+
 def load_last_trade_csv_row(symbol: str, timeframe: str) -> dict[str, str] | None:
     safe_symbol = symbol.replace("/", "-").replace("\\", "-")
     safe_tf = timeframe.replace("/", "-")
@@ -257,6 +302,11 @@ def build_continuity_context(
     bars_since = bars_elapsed_between(prev_time, current_ms, timeframe)
 
     invalidated, invalidation_reason = assess_plan_invalidation(prev_decision, frame)
+    limit_triggered, trigger_reason, trigger_bar = assess_limit_order_triggered(
+        prev_decision,
+        frame,
+        max_bars=bars_since,
+    )
     prev_entry = _parse_price((prev_decision or {}).get("entry_price"))
     direction = str(stage1_json.get("direction") or "neutral")
     always_in = extract_always_in_branch(stage1_json)
@@ -270,6 +320,9 @@ def build_continuity_context(
         "cooldown_bars": max(1, int(cooldown_bars)),
         "invalidated": invalidated,
         "invalidation_reason": invalidation_reason,
+        "limit_triggered": limit_triggered,
+        "limit_trigger_reason": trigger_reason,
+        "limit_trigger_bar": trigger_bar,
         "previous_entry": prev_entry,
         "tick": tick,
         "direction": direction,
@@ -324,10 +377,18 @@ def render_continuity_prompt_block(ctx: dict[str, Any]) -> str:
     cooldown = ctx.get("cooldown_bars", 3)
     inv = ctx.get("invalidated", False)
     inv_reason = ctx.get("invalidation_reason") or ""
+    limit_triggered = bool(ctx.get("limit_triggered"))
+    trigger_reason = str(ctx.get("limit_trigger_reason") or "")
 
     status = "**已失效**" if inv else "**未失效（仍有效）**"
     if inv and inv_reason:
         status += f"：{inv_reason}"
+    if limit_triggered:
+        trigger_status = "**限价已触发**"
+        if trigger_reason:
+            trigger_status += f"：{trigger_reason}"
+    else:
+        trigger_status = "**限价未触发**"
 
     direction = ctx.get("direction", "neutral")
     always_in = ctx.get("always_in_branch")
@@ -337,15 +398,20 @@ def render_continuity_prompt_block(ctx: dict[str, Any]) -> str:
         "",
         f"上一轮（{prev_time}，约 {bars_since} 根 {ctx.get('timeframe', '')} K 线前）方案：",
         f"- **{prev_dir}** {prev_type} @ {prev_entry}，止损 {prev_stop}",
-        f"- 程序判定：{status}",
+        f"- 程序判定：{status}；{trigger_status}",
         "",
         "### 裁定（按优先级）",
-        f"1. **未失效** → 默认 `order_type=不下单`、`terminal.outcome=wait`，"
-        "在 watch_points 说明仍等待上一轮 setup 触发；"
+        f"1. **未失效 + 限价未触发** → 默认 `order_type=不下单`、`terminal.outcome=wait`，"
+        "在 watch_points 说明仍等待上一轮限价/setup 触价；"
         "**禁止**立即在相近结构位反手，除非 K1 收盘已触发失效。",
-        f"2. **同结构位反手冷却**：{cooldown} 根 K 线内，"
+        "2. **未失效 + 限价已触发** → **禁止**写「仍等待限价触发/尚未触价」；"
+        "须承认限价已在程序标注的 K 线触价，改为评估触发后跟随（follow_through）、"
+        "止损是否仍有效、是否需观望平仓条件；可 `order_type=不下单`，"
+        "但 reasoning/watch_points 必须写「限价已于 Kx 触发」及后续条件，"
+        "不得把已触价当成未成交挂单。",
+        f"3. **同结构位反手冷却**：{cooldown} 根 K 线内，"
         "若新 entry 与上一轮 entry 相差≤3跳，**禁止反向**新单（失效后除外）。",
-        "3. **direction=neutral** 时仅顺 §2.4：",
+        "4. **direction=neutral** 时仅顺 §2.4：",
     ]
     if always_in == "AIL":
         lines.append("   - 当前 **AIL** → 只允许做多侧；禁止做空限价/突破。")

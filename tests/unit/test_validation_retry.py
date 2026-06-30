@@ -155,6 +155,38 @@ def test_build_retry_feedback_contains_stage():
     assert "阶段二" in text
 
 
+def test_build_retry_feedback_decision_trace_answer_hint():
+    err = _FakeErr(
+        "c",
+        "'是部分' is not one of ['是', '否', '中性', '等待', '不适用']",
+        [],
+        ["decision_trace.3.answer"],
+    )
+    text = build_retry_feedback(err, stage="stage2", attempt=1, max_attempts=3)
+    assert "decision_trace answer" in text
+    assert "是部分" in text
+
+
+def test_build_retry_feedback_json_syntax_fence_hint():
+    err = _FakeErr(
+        "a",
+        "Expecting property name enclosed in double quotes",
+        [],
+        [],
+        parse_position="line 1 column 2",
+        raw_text='```json\n{"broken":',
+    )
+    text = build_retry_feedback(
+        err,
+        stage="stage2",
+        attempt=1,
+        max_attempts=3,
+        previous_raw='```json\n{"broken":',
+    )
+    assert "JSON 语法提示" in text
+    assert "围栏" in text
+
+
 def test_ensure_stage2_predictions_for_old_record():
     s2 = {
         "decision": {"order_type": "不下单", "reasoning": "等待"},

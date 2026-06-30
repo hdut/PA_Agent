@@ -603,6 +603,14 @@ class DeepSeekClient:
         if cancel_token is not None and cancel_token.is_set():
             raise CancelledError("Request cancelled before API call")
 
+        from pa_agent.ai.cursor_connector import is_openclaw_cs_model
+
+        if is_openclaw_cs_model(self._settings.model):
+            raise RuntimeError(
+                "模型 openclaw_cs 必须使用 Cursor SDK 路由，但当前仍在使用 DeepSeekClient。"
+                "请在「AI 模型」设置中重新保存，或重启应用后再分析。"
+            )
+
         extra_body, _effort = _resolve_thinking_params(
             self._settings, thinking=thinking, reasoning_effort=reasoning_effort
         )

@@ -580,6 +580,7 @@ class TwoStageOrchestrator:
                         "invalid_fields": err.invalid_fields,
                         "raw_text": err.raw_text,
                         "parse_position": err.parse_position,
+                        "validation_attempts": vr_s1.attempts,
                     },
                 }
             )
@@ -899,6 +900,7 @@ class TwoStageOrchestrator:
                         "invalid_fields": err.invalid_fields,
                         "raw_text": err.raw_text,
                         "parse_position": err.parse_position,
+                        "validation_attempts": vr_s2.attempts,
                     },
                 }
             )

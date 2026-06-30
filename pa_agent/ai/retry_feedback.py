@@ -161,6 +161,31 @@ def build_retry_feedback(
             "细节放在 decision_trace §10.3 或 key_factors。"
         )
 
+    if stage == "stage2" and any(
+        "decision_trace" in inv and "answer" in inv for inv in invalid
+    ):
+        lines.append("")
+        lines.append("**decision_trace answer 枚举提示：**")
+        lines.append(
+            "- `answer` 只能用 **是/否/中性/等待/不适用**；"
+            "「部分一致」写 **中性**，「尚需下一根K线确认」写 **等待**；"
+            "**禁止**写「是部分」「部分」「待确认」等。"
+        )
+
+    if category == "a":
+        lines.append("")
+        lines.append("**JSON 语法提示：**")
+        lines.append(
+            "- `content` 必须是**裸 JSON 对象**（以 `{` 开头、以 `}` 结尾），"
+            "**禁止** ` ```json ` 代码围栏或前后缀说明文字。"
+        )
+        prev = (previous_raw or "").strip()
+        if "```" in prev:
+            lines.append(
+                "- 上一轮使用了 markdown 围栏或非 JSON 前缀；请删掉围栏与说明，"
+                "只输出可 `json.loads` 的完整 JSON。"
+            )
+
     lines.append("")
     lines.append(
         "请根据以上说明，在 assistant 正文 `content` 输出**完整**阶段"
